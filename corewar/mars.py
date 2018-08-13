@@ -1,8 +1,9 @@
 import numpy as np
 from collections import deque
+import struct
 
 #define IND_SIZE				2
-#define REG_SIZE				4
+REG_SIZE = 4
 #define DIR_SIZE				REG_SIZE
 
 # define REG_CODE				1
@@ -32,9 +33,9 @@ REG_NUMBER = 16
 #define NBR_LIVE				21
 #define MAX_CHECKS				10
 
-#define T_REG					1
-#define T_DIR					2
-#define T_IND					4
+T_REG = 1
+T_DIR = 2
+T_IND = 4
 #define T_LAB					8
 
 # define PROG_NAME_LENGTH		(128)
@@ -70,7 +71,28 @@ t_op    op_tab[17] =
 };
 '''
 
-OP_LIVE = 0x1
+def op_live(proc):
+	arg_idx = proc.PC + 1
+	val = struct.unpack(">I", proc.mars.memory[arg_idx:arg_idx + REG_SIZE])
+	proc.PC += 1 + REG_SIZE
+	proc.PC %= MEM_SIZE
+	print("Champion {} lives!".format(val))
+
+class Operator:
+	def __init__(self, name, argc, argtypes, opcode, cycles, text, encoding, index, func):
+		self.name = name
+		self.argc = argc
+		self.argtypes = argtypes
+		self.opcode = opcode
+		self.cycles = cycles
+		self.text = text
+		self.encoding = encoding
+		self.index = index
+		self.func = func
+
+OP_TAB = {
+	0x01: Operator("live", 1, (T_DIR,), 1, 10, "alive", False, False, op_live)
+}
 
 class Process:
 	PID = 0
@@ -91,8 +113,8 @@ class Process:
 		if self.op is None:
 			self.op = self.mars.memory[self.PC]
 
-			if self.op == OP_LIVE:
-				self.countdown = 10
+			if self.op in OP_TAB:
+				self.countdown = OP_TAB[self.op].cycles
 			else:
 				self.op = None
 				self.PC = (self.PC + 1) % self.mars.size
@@ -102,6 +124,12 @@ class Process:
 				self.mars.events.append(self)
 
 		print("Proc: {}, PC: {}, op: {}, cd:{}".format(self.PID, self.PC, self.op, self.countdown))
+
+	def exec(self):
+		OP_TAB[self.op].func(self)
+		print("process {} triggered an event({})".format(self.PID, self.op))
+		self.op = None
+		self.countdown = 0
 
 class Champion:
 	ID = 0xffffffff
@@ -120,22 +148,23 @@ class Champion:
 
 class MARS:
 	def __init__(self):
+		Process.PID = 0
 		self.size = MEM_SIZE
 		self.memory = np.zeros((self.size,), dtype = np.byte)
-		self.new_PID = 0
 		self.champions = []
 		self.processes = [] #make a linked list!
 		self.events = deque()
 
-	def add_champion(self, champion):
+	def add_champion(self, champion, offset = 0):
 		self.champions.append(champion)
-		self.memory[0:champion.data.shape[0]] = champion.data
-		self.processes.append(champion.spawn_process(self))
+		self.memory[offset:offset + champion.data.shape[0]] = champion.data
+		self.processes.append(champion.spawn_process(self, offset))
 
 	def step(self):
 		for proc in reversed(self.processes):
 			proc.step()
 
 		for proc in self.events:
-			print("process {} triggered an event({})".format(proc.PID, proc.op))
-			proc.op = None
+			proc.exec()
+
+		self.events.clear()
