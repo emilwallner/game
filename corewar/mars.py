@@ -2,9 +2,9 @@ import numpy as np
 from collections import deque
 import struct
 
-#define IND_SIZE				2
+IND_SIZE = 2
 REG_SIZE = 4
-#define DIR_SIZE				REG_SIZE
+DIR_SIZE = REG_SIZE
 
 # define REG_CODE				1
 # define DIR_CODE				2
@@ -72,14 +72,15 @@ t_op    op_tab[17] =
 '''
 
 def op_live(proc):
-	arg_idx = proc.PC + 1
-	val = struct.unpack(">I", proc.mars.memory[arg_idx:arg_idx + REG_SIZE])
-	proc.PC += 1 + REG_SIZE
-	proc.PC %= MEM_SIZE
-	print("Champion {} lives!".format(val))
+	print("Champion {} lives!".format(proc.args[0]))
+
+def op_ld(proc):
+	print(proc.args)
+	proc.registers[proc.args[1][1]] = proc.args[0][1]
+	print("ld")
 
 class Operator:
-	def __init__(self, name, argc, argtypes, opcode, cycles, text, encoding, index, func):
+	def __init__(self, name, argc, argtypes, opcode, cycles, text, encoding, index, func = None):
 		self.name = name
 		self.argc = argc
 		self.argtypes = argtypes
@@ -91,7 +92,28 @@ class Operator:
 		self.func = func
 
 OP_TAB = {
-	0x01: Operator("live", 1, (T_DIR,), 1, 10, "alive", False, False, op_live)
+	0x01: Operator("live", 1, (T_DIR,), 1, 10, "alive", False, False, op_live),
+	0x02: Operator("ld", 2, (T_DIR | T_IND, T_REG), 2, 5, "load", True, False, op_ld),
+	0x03: Operator("st", 2, (T_REG, T_IND | T_REG), 3, 5, "store", True, False),
+	0x04: Operator("add", 3, (T_REG, T_REG, T_REG), 4, 10, "addition", True, False),
+	0x05: Operator("sub", 3, (T_REG, T_REG, T_REG), 5, 10, "soustraction", True, False),
+	0x06: Operator("and", 3, (T_REG | T_DIR | T_IND, T_REG | T_IND | T_DIR, T_REG), 6, 6,
+		"et (and  r1, r2, r3   r1&r2 -> r3", True, False),
+	0x07: Operator("or", 3, (T_REG | T_IND | T_DIR, T_REG | T_IND | T_DIR, T_REG), 7, 6,
+		"ou  (or   r1, r2, r3   r1 | r2 -> r3", True, False),
+	0x08: Operator("xor", 3, (T_REG | T_IND | T_DIR, T_REG | T_IND | T_DIR, T_REG), 8, 6,
+		"ou (xor  r1, r2, r3   r1^r2 -> r3", True, False),
+	0x09: Operator("zjmp", 1, (T_DIR), 9, 20, "jump if zero", False, True),
+	0x0a: Operator("ldi", 3, (T_REG | T_DIR | T_IND, T_DIR | T_REG, T_REG), 10, 25,
+		"load index", True, True),
+	0x0b: Operator("sti", 3, (T_REG, T_REG | T_DIR | T_IND, T_DIR | T_REG), 11, 25,
+		"store index", True, True),
+	0x0c: Operator("fork", 1, (T_DIR), 12, 800, "fork", False, True),
+	0x0d: Operator("lld", 2, (T_DIR | T_IND, T_REG), 13, 10, "long load", True, False),
+	0x0e: Operator("lldi", 3, (T_REG | T_DIR | T_IND, T_DIR | T_REG, T_REG), 14, 50,
+		"long load index", True, True),
+	0x0f: Operator("lfork", 1, (T_DIR), 15, 1000, "long fork", False, True),
+	0x10: Operator("aff", 1, (T_REG), 16, 2, "aff", True, False)
 }
 
 class Process:
@@ -109,7 +131,10 @@ class Process:
 		self.op = None
 		self.countdown = 0
 
+		self.args = ()
+
 	def step(self):
+		current_pc = self.PC
 		if self.op is None:
 			self.op = self.mars.memory[self.PC]
 
@@ -123,13 +148,69 @@ class Process:
 			if self.countdown == 0:
 				self.mars.events.append(self)
 
-		print("Proc: {}, PC: {}, op: {}, cd:{}".format(self.PID, self.PC, self.op, self.countdown))
+		print("Proc: {}, PC: {}, op: {}, cd:{}".format(self.PID, current_pc, self.op, self.countdown))
 
 	def exec(self):
-		OP_TAB[self.op].func(self)
-		print("process {} triggered an event({})".format(self.PID, self.op))
+		offset = self.arg_parse()
+		def validate_args():
+			operator = OP_TAB[self.op]
+			for i in range(len(self.args)):
+				if operator.argtypes[i] & self.args[i][0] == 0:
+					return False
+			return True
+
+		if validate_args():
+			OP_TAB[self.op].func(self)
+			print("process {}: event({})".format(self.PID, self.op))
+		else:
+			print("process {} invalid event({})".format(self.PID, self.op))
+
 		self.op = None
 		self.countdown = 0
+		print("Skipping {} bytes".format(offset))
+		self.PC += 1 + offset
+		self.PC %= MEM_SIZE
+
+	def arg_parse(self):
+		op = OP_TAB[self.op]
+		position = self.PC + 1
+		arg_offset = 0
+		memory = self.mars.memory
+
+		if op.encoding:
+			self.args = []
+			code = struct.unpack(">B",
+					memory.take(range(position, position + 1), mode = 'wrap'))[0]
+			position += 1
+			for i in range(op.argc):
+				a = (code >> (6 - 2 * i)) & 0b11
+				print("arg: ", a)
+				if a == 0b01:
+					size = 1
+					self.args.append((T_REG, struct.unpack(">B",
+					memory.take(range(position, position + size), mode = 'wrap'))[0]))
+				elif a == 0b10:
+					size = DIR_SIZE
+					self.args.append((T_DIR, struct.unpack(">I",
+					memory.take(range(position, position + size), mode = 'wrap'))[0]))
+				elif a == 0b11:
+					size = IND_SIZE
+					self.args.append((T_IND, struct.unpack(">H",
+					memory.take(range(position, position + size), mode = 'wrap'))[0]))
+				arg_offset += size
+				position += size
+		else:
+			if op.index:
+				size = IND_SIZE
+				self.args = [(T_IND, struct.unpack(">H",
+					memory.take(range(position, position + size), mode = 'wrap'))[0])]
+			else:
+				size = DIR_SIZE
+				self.args = [(T_DIR, struct.unpack(">I",
+					memory.take(range(position, position + size), mode = 'wrap'))[0])]
+			arg_offset += size
+		return arg_offset
+
 
 class Champion:
 	ID = 0xffffffff
