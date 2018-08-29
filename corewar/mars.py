@@ -13,7 +13,7 @@ DIR_SIZE = REG_SIZE
 #define MAX_ARGS_NUMBER			4
 #define MAX_PLAYERS				4
 MEM_SIZE = (4*1024)
-#define IDX_MOD					(MEM_SIZE / 8)
+IDX_MOD = MEM_SIZE // 8
 #define CHAMP_MAX_SIZE			(MEM_SIZE / 6)
 
 #define COMMENT_CHAR			'#'
@@ -71,12 +71,22 @@ t_op    op_tab[17] =
 };
 '''
 
+def get_ind(memory, pos):
+	val = struct.unpack(">I", memory.take(
+					range(pos, pos + REG_SIZE), mode = 'wrap'))[0]
+	return val
+
 def op_live(proc):
 	print("Champion {} lives!".format(proc.args[0]))
 
 def op_ld(proc):
 	print(proc.args)
-	proc.registers[proc.args[1][1]] = proc.args[0][1]
+	arg1 = proc.args[0]
+	if arg1[0] == T_IND:
+		at = (proc.PC + arg1[1] % IDX_MOD) % MEM_SIZE
+		proc.registers[proc.args[1][1]] = get_ind(proc.mars.memory, at)
+	else:
+		proc.registers[proc.args[1][1]] = proc.args[0][1]
 	print("ld")
 
 class Operator:
@@ -139,7 +149,7 @@ class Process:
 			self.op = self.mars.memory[self.PC]
 
 			if self.op in OP_TAB:
-				self.countdown = OP_TAB[self.op].cycles
+				self.countdown = OP_TAB[self.op].cycles - 1
 			else:
 				self.op = None
 				self.PC = (self.PC + 1) % self.mars.size
