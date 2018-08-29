@@ -80,7 +80,6 @@ def op_live(proc):
 	print("Champion {} lives!".format(proc.args[0]))
 
 def op_ld(proc):
-	print(proc.args)
 	arg1 = proc.args[0]
 	if arg1[0] == T_IND:
 		at = (proc.PC + arg1[1] % IDX_MOD) % MEM_SIZE
@@ -167,6 +166,9 @@ class Process:
 			for i in range(len(self.args)):
 				if operator.argtypes[i] & self.args[i][0] == 0:
 					return False
+				if self.args[i][0] == T_REG and
+				(self.args[i][1] > REG_NUMBER or self.args[i][1] == 0):
+					return False
 			return True
 
 		if validate_args():
@@ -191,6 +193,7 @@ class Process:
 			self.args = []
 			code = struct.unpack(">B",
 					memory.take(range(position, position + 1), mode = 'wrap'))[0]
+			arg_offset += 1
 			position += 1
 			for i in range(op.argc):
 				a = (code >> (6 - 2 * i)) & 0b11
