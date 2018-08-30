@@ -105,16 +105,84 @@ def set_val(proc, arg, val):
 			memory[0:REG_SIZE - wrap] = data[wrap: REG_SIZE]
 
 def op_live(proc):
-	print("Champion {} lives!".format(proc.args[0]))
+	champ = get_val(proc, proc.args[0])
+	print("Champion {} lives!".format(champ))
 
 def op_ld(proc):
-	arg1 = proc.args[0]
-	if arg1[0] == T_IND:
-		at = (proc.PC + arg1[1] % IDX_MOD) % MEM_SIZE
-		proc.registers[proc.args[1][1]] = get_ind(proc.mars.memory, at)
-	else:
-		proc.registers[proc.args[1][1]] = proc.args[0][1]
-	print("ld")
+	val = get_val(proc, proc.args[0])
+	set_val(proc, proc.args[1], val)
+	proc.carry = (val == 0)
+
+def op_st(proc):
+	set_val(proc, proc.args[1], get_val(proc, proc, args[0]))
+
+def op_add(proc):
+	res = np.uint32(get_val(proc, proc.args[0])) + np.uint32(get_val(proc, proc.args[1]))
+	set_val(proc, proc.args[2], res.item())
+	proc.carry = (res.item() == 0)
+
+def op_sub(proc):
+	res = np.uint32(get_val(proc, proc.args[0])) - np.uint32(get_val(proc, proc.args[1]))
+	set_val(proc, proc.args[2], res.item())
+	proc.carry = (res.item() == 0)
+
+def op_and(proc):
+	res = np.uint32(get_val(proc, proc.args[0])) & np.uint32(get_val(proc, proc.args[1]))
+	set_val(proc, proc.args[2], res.item())
+	proc.carry = (res.item() == 0)
+
+def op_or(proc):
+	res = np.uint32(get_val(proc, proc.args[0])) | np.uint32(get_val(proc, proc.args[1]))
+	set_val(proc, proc.args[2], res.item())
+	proc.carry = (res.item() == 0)
+
+def op_xor(proc):
+	res = np.uint32(get_val(proc, proc.args[0])) ^ np.uint32(get_val(proc, proc.args[1]))
+	set_val(proc, proc.args[2], res.item())
+	proc.carry = (res.item() == 0)
+
+def op_zjmp(proc):
+	if proc.carry:
+		proc.PC += proc.args[0][1] % IDX_MOD
+
+def op_ldi(proc):
+	addr = (np.uint16(get_val(proc, proc.args[0], True, True)) % IDX_MOD) + \
+										np.uint16(get_val(proc, proc.args[1], True, True))
+	addr = (T_IND, addr.item() % IDX_MOD)
+	set_val(proc, proc.args[2], get_val(proc, addr))
+
+def op_sti(proc):
+	addr = (np.uint32(get_val(proc, proc.args[1])) % IDX_MOD) + \
+						np.uint32(get_val(proc, proc.args[2]))
+	addr = (T_IND, addr.item())
+	set_val(proc, proc.args[0], get_val(proc, addr))
+
+def op_fork(proc):
+	addr = get_val(proc, proc.args[0]) % IDX_MOD
+	addr = (proc.PC + addr) % MEM_SIZE
+	p = Process(proc.parent, proc.mars, addr)
+	p.registers = list(proc.registers)
+	p.carry = proc.carry
+	proc.mars.processes.append(p)
+
+def op_lld(proc):
+	val = get_val(proc, proc.args[0], False)
+	set_val(proc, proc.args[1], val)
+	proc.carry = (val == 0)
+
+def op_lldi(proc):
+	addr = (np.uint16(get_val(proc, proc.args[0], False, True))) + \
+										np.uint16(get_val(proc, proc.args[1], False, True))
+	addr = (T_IND, addr.item())
+	set_val(proc, proc.args[2], get_val(proc, addr))
+
+def op_lfork(proc):
+	addr = get_val(proc, proc.args[0])
+	addr = (proc.PC + addr) % MEM_SIZE
+	p = Process(proc.parent, proc.mars, addr)
+	p.registers = list(proc.registers)
+	p.carry = proc.carry
+	proc.mars.processes.append(p)
 
 class Operator:
 	def __init__(self, name, argc, argtypes, opcode, cycles, text, encoding, index, func = None):
@@ -131,26 +199,26 @@ class Operator:
 OP_TAB = {
 	0x01: Operator("live", 1, (T_DIR,), 1, 10, "alive", False, False, op_live),
 	0x02: Operator("ld", 2, (T_DIR | T_IND, T_REG), 2, 5, "load", True, False, op_ld),
-	0x03: Operator("st", 2, (T_REG, T_IND | T_REG), 3, 5, "store", True, False),
-	0x04: Operator("add", 3, (T_REG, T_REG, T_REG), 4, 10, "addition", True, False),
-	0x05: Operator("sub", 3, (T_REG, T_REG, T_REG), 5, 10, "soustraction", True, False),
+	0x03: Operator("st", 2, (T_REG, T_IND | T_REG), 3, 5, "store", True, False, op_st),
+	0x04: Operator("add", 3, (T_REG, T_REG, T_REG), 4, 10, "addition", True, False, op_add),
+	0x05: Operator("sub", 3, (T_REG, T_REG, T_REG), 5, 10, "soustraction", True, False, op_sub),
 	0x06: Operator("and", 3, (T_REG | T_DIR | T_IND, T_REG | T_IND | T_DIR, T_REG), 6, 6,
-		"et (and  r1, r2, r3   r1&r2 -> r3", True, False),
+		"et (and  r1, r2, r3   r1&r2 -> r3", True, False, op_and),
 	0x07: Operator("or", 3, (T_REG | T_IND | T_DIR, T_REG | T_IND | T_DIR, T_REG), 7, 6,
-		"ou  (or   r1, r2, r3   r1 | r2 -> r3", True, False),
+		"ou  (or   r1, r2, r3   r1 | r2 -> r3", True, False, op_or),
 	0x08: Operator("xor", 3, (T_REG | T_IND | T_DIR, T_REG | T_IND | T_DIR, T_REG), 8, 6,
-		"ou (xor  r1, r2, r3   r1^r2 -> r3", True, False),
-	0x09: Operator("zjmp", 1, (T_DIR), 9, 20, "jump if zero", False, True),
+		"ou (xor  r1, r2, r3   r1^r2 -> r3", True, False, op_xor),
+	0x09: Operator("zjmp", 1, (T_DIR), 9, 20, "jump if zero", False, True, op_zjmp),
 	0x0a: Operator("ldi", 3, (T_REG | T_DIR | T_IND, T_DIR | T_REG, T_REG), 10, 25,
-		"load index", True, True),
+		"load index", True, True, op_ldi),
 	0x0b: Operator("sti", 3, (T_REG, T_REG | T_DIR | T_IND, T_DIR | T_REG), 11, 25,
-		"store index", True, True),
-	0x0c: Operator("fork", 1, (T_DIR), 12, 800, "fork", False, True),
-	0x0d: Operator("lld", 2, (T_DIR | T_IND, T_REG), 13, 10, "long load", True, False),
+		"store index", True, True, op_sti),
+	0x0c: Operator("fork", 1, (T_DIR), 12, 800, "fork", False, True, op_fork),
+	0x0d: Operator("lld", 2, (T_DIR | T_IND, T_REG), 13, 10, "long load", True, False, op_lld),
 	0x0e: Operator("lldi", 3, (T_REG | T_DIR | T_IND, T_DIR | T_REG, T_REG), 14, 50,
-		"long load index", True, True),
-	0x0f: Operator("lfork", 1, (T_DIR), 15, 1000, "long fork", False, True),
-	0x10: Operator("aff", 1, (T_REG), 16, 2, "aff", True, False)
+		"long load index", True, True, op_lldi),
+	0x0f: Operator("lfork", 1, (T_DIR), 15, 1000, "long fork", False, True, op_lfork),
+	#0x10: Operator("aff", 1, (T_REG), 16, 2, "aff", True, False, op_aff)
 }
 
 class Process:
