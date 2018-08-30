@@ -2,13 +2,14 @@ import numpy as np
 from collections import deque
 import struct
 
+#DON'T CHANGE THESE THREE VALUES UNLESS YOU WANT TO GET AN UNUSABLE MESS
 IND_SIZE = 2
 REG_SIZE = 4
 DIR_SIZE = REG_SIZE
 
-# define REG_CODE				1
-# define DIR_CODE				2
-# define IND_CODE				3
+REG_CODE = 1
+DIR_CODE = 2
+IND_CODE = 3
 
 #define MAX_ARGS_NUMBER			4
 #define MAX_PLAYERS				4
@@ -71,10 +72,37 @@ t_op    op_tab[17] =
 };
 '''
 
-def get_ind(memory, pos):
-	val = struct.unpack(">I", memory.take(
+def get_val(proc, arg, idx = True, short = False):
+	if arg[0] == T_REG:
+		return proc.registers[arg[1] - 1]
+	elif arg[0] == T_DIR:
+		return arg[1]
+	elif arg[0] == T_IND:
+		if idx:
+			pos = (proc.PC + arg[1] % IDX_MOD) % MEM_SIZE
+		else:
+			pos = (proc.PC + arg[1]) % MEM_SIZE
+		memory = proc.mars.memory
+		if short:
+			val = struct.unpack(">H", memory.take(
+					range(pos, pos + IND_SIZE), mode = 'wrap'))[0]
+		else:
+			val = struct.unpack(">I", memory.take(
 					range(pos, pos + REG_SIZE), mode = 'wrap'))[0]
-	return val
+		return val
+
+def set_val(proc, arg, val):
+	if arg[0] == T_REG:
+		proc.registers[arg[1] - 1] = val
+	elif arg[0] == T_IND:
+		data = bytearray(struct.pack(">I", val))
+		pos = (proc.PC + arg[1] % IDX_MOD) % MEM_SIZE
+		if (pos + REG_SIZE < MEM_SIZE):
+			memory[pos:pos + REG_SIZE] = data
+		else:
+			wrap = MEM_SIZE - pos
+			memory[pos:MEM_SIZE] = data[0:wrap]
+			memory[0:REG_SIZE - wrap] = data[wrap: REG_SIZE]
 
 def op_live(proc):
 	print("Champion {} lives!".format(proc.args[0]))
@@ -134,9 +162,9 @@ class Process:
 		self.parent = parent
 		self.mars = mars
 
-		self.registers = [r for r in range(REG_NUMBER)]
+		self.registers = [0 for r in range(REG_NUMBER)]
 		self.PC = position
-		self.carry = 0
+		self.carry = False
 		self.op = None
 		self.countdown = 0
 
@@ -166,14 +194,14 @@ class Process:
 			for i in range(len(self.args)):
 				if operator.argtypes[i] & self.args[i][0] == 0:
 					return False
-				if self.args[i][0] == T_REG and
-				(self.args[i][1] > REG_NUMBER or self.args[i][1] == 0):
+				if self.args[i][0] == T_REG and \
+					(self.args[i][1] > REG_NUMBER or self.args[i][1] == 0):
 					return False
 			return True
 
 		if validate_args():
 			OP_TAB[self.op].func(self)
-			print("process {}: event({})".format(self.PID, self.op))
+			print("process {}: event({}: {})".format(self.PID, self.op, OP_TAB[self.op].text))
 		else:
 			print("process {} invalid event({})".format(self.PID, self.op))
 
@@ -198,15 +226,20 @@ class Process:
 			for i in range(op.argc):
 				a = (code >> (6 - 2 * i)) & 0b11
 				print("arg: ", a)
-				if a == 0b01:
+				if a == REG_CODE:
 					size = 1
 					self.args.append((T_REG, struct.unpack(">B",
 					memory.take(range(position, position + size), mode = 'wrap'))[0]))
-				elif a == 0b10:
-					size = DIR_SIZE
-					self.args.append((T_DIR, struct.unpack(">I",
-					memory.take(range(position, position + size), mode = 'wrap'))[0]))
-				elif a == 0b11:
+				elif a == DIR_CODE:
+					if op.index:
+						size = IND_SIZE
+						self.args.append((T_DIR, struct.unpack(">H",
+						memory.take(range(position, position + size), mode = 'wrap'))[0]))
+					else:
+						size = DIR_SIZE
+						self.args.append((T_DIR, struct.unpack(">I",
+						memory.take(range(position, position + size), mode = 'wrap'))[0]))
+				elif a == IND_CODE:
 					size = IND_SIZE
 					self.args.append((T_IND, struct.unpack(">H",
 					memory.take(range(position, position + size), mode = 'wrap'))[0]))
@@ -236,15 +269,16 @@ class Champion:
 	def __str__(self):
 		return ("Champion: {}".format(self.name))
 
-	def spawn_process(self, mars, position = 0):
-		proc = Process(self, mars, position)
-		return proc
+	def make_process(self, mars, position = 0):
+		p = Process(self, mars, position)
+		p.registers[0] = self.ID
+		return p
 
 class MARS:
 	def __init__(self):
 		Process.PID = 0
 		self.size = MEM_SIZE
-		self.memory = np.zeros((self.size,), dtype = np.byte)
+		self.memory = np.zeros((self.size,), dtype = np.ubyte)
 		self.champions = []
 		self.processes = [] #make a linked list!
 		self.events = deque()
@@ -252,7 +286,7 @@ class MARS:
 	def add_champion(self, champion, offset = 0):
 		self.champions.append(champion)
 		self.memory[offset:offset + champion.data.shape[0]] = champion.data
-		self.processes.append(champion.spawn_process(self, offset))
+		self.processes.append(champion.make_process(self, offset))
 
 	def step(self):
 		for proc in reversed(self.processes):
