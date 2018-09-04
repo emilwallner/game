@@ -1,6 +1,7 @@
 import numpy as np
 from collections import deque
 import struct
+import sys
 
 #DON'T CHANGE THESE THREE VALUES UNLESS YOU WANT TO GET AN UNUSABLE MESS
 IND_SIZE = 2
@@ -12,10 +13,10 @@ DIR_CODE = 2
 IND_CODE = 3
 
 #define MAX_ARGS_NUMBER			4
-#define MAX_PLAYERS				4
+MAX_PLAYERS = 4
 MEM_SIZE = (4*1024)
 IDX_MOD = MEM_SIZE // 8
-#define CHAMP_MAX_SIZE			(MEM_SIZE / 6)
+CHAMP_MAX_SIZE = MEM_SIZE // 6
 
 #define COMMENT_CHAR			'#'
 #define LABEL_CHAR				':'
@@ -29,19 +30,19 @@ IDX_MOD = MEM_SIZE // 8
 
 REG_NUMBER = 16
 
-#define CYCLE_TO_DIE			1536
-#define CYCLE_DELTA				50
-#define NBR_LIVE				21
-#define MAX_CHECKS				10
+CYCLE_TO_DIE = 1536
+CYCLE_DELTA = 50
+NBR_LIVE = 21
+MAX_CHECKS = 10
 
 T_REG = 1
 T_DIR = 2
 T_IND = 4
 #define T_LAB					8
 
-# define PROG_NAME_LENGTH		(128)
-# define COMMENT_LENGTH			(2048)
-# define COREWAR_EXEC_MAGIC		0xea83f3
+PROG_NAME_LENGTH = 128
+COMMENT_LENGTH = 2048
+COREWAR_EXEC_MAGIC = 0xea83f3
 
 '''
 t_op    op_tab[17] =
@@ -92,6 +93,7 @@ def get_val(proc, arg, idx = True, short = False):
 		return val
 
 def set_val(proc, arg, val):
+	memory = proc.mars.memory
 	if arg[0] == T_REG:
 		proc.registers[arg[1] - 1] = val
 	elif arg[0] == T_IND:
@@ -114,7 +116,7 @@ def op_ld(proc):
 	proc.carry = (val == 0)
 
 def op_st(proc):
-	set_val(proc, proc.args[1], get_val(proc, proc, args[0]))
+	set_val(proc, proc.args[1], get_val(proc, proc.args[0]))
 
 def op_add(proc):
 	res = np.uint32(get_val(proc, proc.args[0])) + np.uint32(get_val(proc, proc.args[1]))
@@ -208,17 +210,17 @@ OP_TAB = {
 		"ou  (or   r1, r2, r3   r1 | r2 -> r3", True, False, op_or),
 	0x08: Operator("xor", 3, (T_REG | T_IND | T_DIR, T_REG | T_IND | T_DIR, T_REG), 8, 6,
 		"ou (xor  r1, r2, r3   r1^r2 -> r3", True, False, op_xor),
-	0x09: Operator("zjmp", 1, (T_DIR), 9, 20, "jump if zero", False, True, op_zjmp),
+	0x09: Operator("zjmp", 1, (T_DIR, ), 9, 20, "jump if zero", False, True, op_zjmp),
 	0x0a: Operator("ldi", 3, (T_REG | T_DIR | T_IND, T_DIR | T_REG, T_REG), 10, 25,
 		"load index", True, True, op_ldi),
 	0x0b: Operator("sti", 3, (T_REG, T_REG | T_DIR | T_IND, T_DIR | T_REG), 11, 25,
 		"store index", True, True, op_sti),
-	0x0c: Operator("fork", 1, (T_DIR), 12, 800, "fork", False, True, op_fork),
+	0x0c: Operator("fork", 1, (T_DIR, ), 12, 800, "fork", False, True, op_fork),
 	0x0d: Operator("lld", 2, (T_DIR | T_IND, T_REG), 13, 10, "long load", True, False, op_lld),
 	0x0e: Operator("lldi", 3, (T_REG | T_DIR | T_IND, T_DIR | T_REG, T_REG), 14, 50,
 		"long load index", True, True, op_lldi),
-	0x0f: Operator("lfork", 1, (T_DIR), 15, 1000, "long fork", False, True, op_lfork),
-	#0x10: Operator("aff", 1, (T_REG), 16, 2, "aff", True, False, op_aff)
+	0x0f: Operator("lfork", 1, (T_DIR, ), 15, 1000, "long fork", False, True, op_lfork),
+	#0x10: Operator("aff", 1, (T_REG, ), 16, 2, "aff", True, False, op_aff)
 }
 
 class Process:
@@ -259,14 +261,16 @@ class Process:
 		offset = self.arg_parse()
 		def validate_args():
 			operator = OP_TAB[self.op]
-			for i in range(len(self.args)):
-				if operator.argtypes[i] & self.args[i][0] == 0:
-					return False
-				if self.args[i][0] == T_REG and \
-					(self.args[i][1] > REG_NUMBER or self.args[i][1] == 0):
-					return False
-			return True
-
+			if operator.encoding:
+				for i in range(len(self.args)):
+					if operator.argtypes[i] & self.args[i][0] == 0:
+						return False
+					if self.args[i][0] == T_REG and \
+						(self.args[i][1] > REG_NUMBER or self.args[i][1] == 0):
+						return False
+				return True
+			else:
+				return len(operator.argtypes) == 1
 		if validate_args():
 			OP_TAB[self.op].func(self)
 			print("process {}: event({}: {})".format(self.PID, self.op, OP_TAB[self.op].text))
@@ -316,7 +320,7 @@ class Process:
 		else:
 			if op.index:
 				size = IND_SIZE
-				self.args = [(T_IND, struct.unpack(">H",
+				self.args = [(T_DIR, struct.unpack(">H",
 					memory.take(range(position, position + size), mode = 'wrap'))[0])]
 			else:
 				size = DIR_SIZE
@@ -350,11 +354,27 @@ class MARS:
 		self.champions = []
 		self.processes = [] #make a linked list!
 		self.events = deque()
+		self.steps = 0
 
-	def add_champion(self, champion, offset = 0):
+		self.last_alive = None
+		self.cycle_count = 0
+
+	def add_champion(self, champion):
+		if len(self.champions) >= MAX_PLAYERS:
+			raise Exception("too many players")
 		self.champions.append(champion)
-		self.memory[offset:offset + champion.data.shape[0]] = champion.data
-		self.processes.append(champion.make_process(self, offset))
+		self.champ_set.add(champion.ID)
+
+	def setup(self):
+		champions = self.champions
+		for i in range(len(champions)):
+			offset = (MEM_SIZE // len(champions)) * i
+			self.memory[offset:offset + champions[i].data.shape[0]] = champions[i].data
+			self.processes.append(champions[i].make_process(self, offset))
+
+	def call_alive(self, ID):
+		if ID in self.champ_set:
+			self.last_alive = ID
 
 	def step(self):
 		for proc in reversed(self.processes):
@@ -364,3 +384,33 @@ class MARS:
 			proc.exec()
 
 		self.events.clear()
+		self.steps += 1
+		self.cycle_count += 1
+		if self.cycle_count >= CYCLE_TO_DIE:
+
+
+	def run(self):
+		while len(processes) > 0:
+			self.step()
+
+def load_champion(filename):
+	f = np.fromfile(filename, dtype = np.ubyte)
+	if struct.unpack(">I", f[0:4])[0] == COREWAR_EXEC_MAGIC:
+		name = f[4:4 + PROG_NAME_LENGTH].tobytes().decode("ascii")
+		data = f[4 + PROG_NAME_LENGTH + 8 + COMMENT_LENGTH + 4:]
+		c = Champion(data, name)
+		return c
+	raise Exception("Invalid file")
+
+if __name__ == '__main__':
+	if len(sys.argv) <= 1:
+		print("no arguments")
+		exit(1)
+	m = MARS()
+	for i in range(1, len(sys.argv)):
+		m.add_champion(load_champion(sys.argv[i]))
+	m.setup()
+	while True:
+		for i in range(int(input("How many steps?"))):
+			m.step()
+
