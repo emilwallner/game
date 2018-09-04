@@ -108,6 +108,8 @@ def set_val(proc, arg, val):
 
 def op_live(proc):
 	champ = get_val(proc, proc.args[0])
+	proc.mars.call_alive(champ)
+	proc.alive = True
 	print("Champion {} lives!".format(champ))
 
 def op_ld(proc):
@@ -240,6 +242,8 @@ class Process:
 
 		self.args = ()
 
+		self.alive = False
+
 	def step(self):
 		current_pc = self.PC
 		if self.op is None:
@@ -352,12 +356,17 @@ class MARS:
 		self.size = MEM_SIZE
 		self.memory = np.zeros((self.size,), dtype = np.ubyte)
 		self.champions = []
+		self.champ_set = set()
 		self.processes = [] #make a linked list!
 		self.events = deque()
 		self.steps = 0
 
+		self.cycle_to_die = CYCLE_TO_DIE
+
 		self.last_alive = None
 		self.cycle_count = 0
+		self.live_count = 0
+		self.checks = 0
 
 	def add_champion(self, champion):
 		if len(self.champions) >= MAX_PLAYERS:
@@ -375,6 +384,16 @@ class MARS:
 	def call_alive(self, ID):
 		if ID in self.champ_set:
 			self.last_alive = ID
+		self.live_count += 1
+
+	def cleanup(self):
+		p = self.processes
+		for i in range(len(p)):
+			if p[i].alive == True:
+				p[i].alive = False
+			else:
+				p[i] = None
+		self.processes = list(filter(lambda x: x != None, p))
 
 	def step(self):
 		for proc in reversed(self.processes):
@@ -386,11 +405,20 @@ class MARS:
 		self.events.clear()
 		self.steps += 1
 		self.cycle_count += 1
-		if self.cycle_count >= CYCLE_TO_DIE:
+		if self.cycle_count >= self.cycle_to_die:
+			self.cleanup()
+			if self.live_count >= NBR_LIVE:
+				self.cycle_to_die -= CYCLE_DELTA
+				self.checks = 0
+			else:
+				self.checks += 1
+			if self.checks >= MAX_CHECKS:
+				self.cycle_to_die -= CYCLE_DELTA
+			self.cycle_count = 0
 
 
 	def run(self):
-		while len(processes) > 0:
+		while len(self.processes) > 0:
 			self.step()
 
 def load_champion(filename):
@@ -410,7 +438,9 @@ if __name__ == '__main__':
 	for i in range(1, len(sys.argv)):
 		m.add_champion(load_champion(sys.argv[i]))
 	m.setup()
+	m.run()
+	'''
 	while True:
 		for i in range(int(input("How many steps?"))):
 			m.step()
-
+	'''
