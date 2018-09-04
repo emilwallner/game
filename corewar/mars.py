@@ -3,16 +3,16 @@ from collections import deque
 import struct
 import sys
 
-#DON'T CHANGE THESE THREE VALUES UNLESS YOU WANT TO GET AN UNUSABLE MESS
+#DON'T CHANGE THESE FOUR VALUES UNLESS YOU WANT TO GET AN UNUSABLE MESS
 IND_SIZE = 2
 REG_SIZE = 4
 DIR_SIZE = REG_SIZE
+MAX_ARGS_NUMBER = 4
 
 REG_CODE = 1
 DIR_CODE = 2
 IND_CODE = 3
 
-#define MAX_ARGS_NUMBER			4
 MAX_PLAYERS = 4
 MEM_SIZE = (4*1024)
 IDX_MOD = MEM_SIZE // 8
@@ -259,7 +259,7 @@ class Process:
 			if self.countdown == 0:
 				self.mars.events.append(self)
 
-		print("Proc: {}, PC: {}, op: {}, cd:{}".format(self.PID, current_pc, self.op, self.countdown))
+		#print("Proc: {}, PC: {}, op: {}, cd:{}".format(self.PID, current_pc, self.op, self.countdown))
 
 	def exec(self):
 		offset = self.arg_parse()
@@ -299,9 +299,9 @@ class Process:
 					memory.take(range(position, position + 1), mode = 'wrap'))[0]
 			arg_offset += 1
 			position += 1
-			for i in range(op.argc):
+			for i in range(MAX_ARGS_NUMBER):
 				a = (code >> (6 - 2 * i)) & 0b11
-				print("arg: ", a)
+				#print("arg: ", a)
 				if a == REG_CODE:
 					size = 1
 					self.args.append((T_REG, struct.unpack(">B",
@@ -319,6 +319,8 @@ class Process:
 					size = IND_SIZE
 					self.args.append((T_IND, struct.unpack(">H",
 					memory.take(range(position, position + size), mode = 'wrap'))[0]))
+				else:
+					size = 0
 				arg_offset += size
 				position += size
 		else:
@@ -420,6 +422,7 @@ class MARS:
 	def run(self):
 		while len(self.processes) > 0:
 			self.step()
+		print(self.steps)
 
 def load_champion(filename):
 	f = np.fromfile(filename, dtype = np.ubyte)
